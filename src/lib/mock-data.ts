@@ -61,11 +61,14 @@ export const mockOrders: Order[] = [0, 1, 2].map((index) => {
   const variant = product.variants[0];
   return {
     id: `demo-order-${index}`, order_number: ["F01-2468", "F01-1987", "F01-1765"][index],
-    status: "CONFIRMED", payment_status: "PAID", fulfilment_status: index === 1 ? "SHIPPED" : "DELIVERED",
+    status: index === 1 ? "SHIPPED" : "DELIVERED", payment_status: "PAID", fulfilment_status: "FULFILLED",
     currency: "INR", subtotal_minor: variant.price_minor, total_minor: variant.price_minor,
+    discount_minor: 0, shipping_minor: 0, tax_minor: 0,
+    contact_email: mockProfile.email, shipping_address: mockAddresses[0],
     placed_at: ["2026-10-12T10:00:00Z", "2026-09-28T10:00:00Z", "2026-09-12T10:00:00Z"][index],
     items: [{ id: `demo-line-${index}`, product_name_snapshot: product.title, variant_label_snapshot: variant.title, sku_snapshot: variant.sku, quantity: 1, line_total_minor: variant.price_minor }],
-    payments: [], shipments: [],
+    payments: [{ id: `demo-payment-${index}`, provider: "Demo payment", status: "CAPTURED", amount_minor: variant.price_minor, currency: "INR" }],
+    shipments: [{ id: `demo-shipment-${index}`, carrier: "Demo carrier", status: index === 1 ? "SHIPPED" : "DELIVERED", tracking_number: `DEMO-${index + 1}`, shipped_at: ["2026-10-13T10:00:00Z", "2026-09-29T10:00:00Z", "2026-09-13T10:00:00Z"][index], delivered_at: index === 1 ? null : ["2026-10-16T10:00:00Z", null, "2026-09-16T10:00:00Z"][index] }],
   };
 });
 

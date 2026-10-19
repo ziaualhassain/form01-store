@@ -7,6 +7,7 @@ import type { HomepageSection, Product } from "@/lib/api";
 import { isMockMode } from "@/lib/store-config";
 import Link from "next/link";
 import ShopCatalogue from "@/components/shop-catalogue";
+import { catalogueCategories } from "@/lib/categories";
 
 const mountainImage = "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=2000&q=85";
 
@@ -38,20 +39,11 @@ function Photo({ src, mobile, alt = "", eager = false }: { src: string; mobile?:
   </picture>;
 }
 
-const categories = [
-  { title: "Hoodies", type: "HOODIE", image: "/est_01_drop.png", position: "64% center" },
-  { title: "Sweatshirts", type: "SWEATSHIRT", image: "/est_01_drop.png", position: "94% center" },
-  { title: "Tees", type: "SHIRT", image: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=500&q=85" },
-  { title: "Caps", type: "CAP", image: "https://images.unsplash.com/photo-1588850561407-ed78c282e89b?auto=format&fit=crop&w=500&q=85" },
-  { title: "Accessories", type: "ACCESSORIES", image: "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&w=500&q=85" },
-  { title: "Books", type: "BOOK", image: "https://images.unsplash.com/photo-1544947950-fa07a98d237f?auto=format&fit=crop&w=500&q=85" },
-];
-
 function RoundArrow() {
   return <span className="round-arrow"><ArrowRight size={13} strokeWidth={1.5} /></span>;
 }
 
-export default function DynamicHomepage({ sections, products, catalogueStatus, wishlist, onWishlist, onRetry, onProductType, onProduct, onJoin, status }: {
+export default function DynamicHomepage({ sections, products, catalogueStatus, wishlist, onWishlist, onRetry, onProductType, onProduct, status }: {
   sections: HomepageSection[];
   products: Product[];
   catalogueStatus: "loading" | "live" | "unavailable";
@@ -60,10 +52,10 @@ export default function DynamicHomepage({ sections, products, catalogueStatus, w
   onRetry: () => void;
   onProductType: (productType: string) => void;
   onProduct: (product: Product) => void;
-  onJoin: (email: string) => void;
   status: "loading" | "live" | "unavailable";
 }) {
   const [slideIndex, setSlideIndex] = useState(0);
+  const [shopCategory, setShopCategory] = useState("All");
   const sorted = sections.slice().sort((left, right) => left.position - right.position);
   const heroes = sorted.filter((section) => section.type === "hero");
   const activeIndex = heroes.length ? slideIndex % heroes.length : 0;
@@ -75,6 +67,7 @@ export default function DynamicHomepage({ sections, products, catalogueStatus, w
   const publishedProducts = collectionSections.flatMap((section) => section.products || []);
   const popularProducts = Array.from(new Map([...publishedProducts, ...products].filter((product) => product.status === "ACTIVE").map((product) => [product.id, product])).values()).slice(0, 4);
   const announcement = sorted.find((section) => section.type === "announcement");
+  const categories = catalogueCategories(products, sections);
 
   return <div className="home-experience">
     {announcement && <div className="home-announcement">{text(announcement.content.text, text(announcement.content.title))}</div>}
@@ -100,17 +93,19 @@ export default function DynamicHomepage({ sections, products, catalogueStatus, w
     {status === "unavailable" && <p className="content-notice" role="status">Published content is temporarily unavailable. Please refresh to try again.</p>}
     {status === "live" && !hero && <p className="content-notice" role="status">No campaign has been published yet.</p>}
 
-    <section className="home-section category-section" aria-labelledby="categories-title">
+    {categories.length > 0 && <section className="home-section category-section" aria-labelledby="categories-title">
       <div className="home-section-heading"><h2 id="categories-title">Shop by Category</h2><a href="#shop">View All <ArrowRight size={14} /></a></div>
       <div className="category-rail">{categories.map((category) => <button className="category-tile" key={category.type} onClick={() => onProductType(category.type)}>
-        <span className="category-photo" style={{ objectPosition: category.position }}>{(productsImage(category.type, collectionSections) || isMockMode) && <Photo src={productsImage(category.type, collectionSections) || category.image} alt="" />}</span><span className="tile-shade" /><span className="category-name">{category.title}</span><RoundArrow />
+        <span className="category-photo">{category.image ? <Photo src={category.image} mobile={category.mobile} alt={category.alt} /> : <span className="category-image-placeholder">FORM/01</span>}</span><span className="tile-shade" /><span className="category-name">{category.title}</span><RoundArrow />
       </button>)}</div>
-    </section>
+    </section>}
 
     <section className="home-section popular-choices" aria-labelledby="popular-choices-title">
       <div className="home-section-heading"><h2 id="popular-choices-title">Popular Choices</h2><Link href="/shop">View All <ArrowRight size={14} /></Link></div>
       <ShopCatalogue collectionView products={popularProducts} status={popularProducts.length ? "live" : catalogueStatus} query="" category="All" onCategory={() => {}} wishlist={wishlist} onWishlist={onWishlist} onProduct={onProduct} onRetry={onRetry} />
     </section>
+
+    <ShopCatalogue infiniteScroll products={products} status={catalogueStatus} query="" category={shopCategory} onCategory={setShopCategory} wishlist={wishlist} onWishlist={onWishlist} onProduct={onProduct} onRetry={onRetry} />
 
     <div>
       {sorted.filter((section) => section.type === "statement").map((section) => <section className="home-statement" key={section.id}><h2>{text(section.content.title)}</h2><p>{text(section.content.body)}</p></section>)}
@@ -118,14 +113,5 @@ export default function DynamicHomepage({ sections, products, catalogueStatus, w
     <section className="benefit-strip" aria-label="Our principles">
       {[{ Icon: Mountain, title: "Thoughtful Design", copy: "Minimal, functional, timeless." }, { Icon: Diamond, title: "Premium Quality", copy: "Made to last, not for seasons." }, { Icon: Leaf, title: "Conscious Choices", copy: "Less excess. More intention." }, { Icon: Globe2, title: "A Higher Tomorrow", copy: "Thoughtful essentials, wherever you are." }].map(({ Icon, title, copy }) => <div key={title}><Icon size={32} strokeWidth={1} /><div><h3>{title}</h3><p>{copy}</p></div></div>)}
     </section>
-    <section className="journey-section">
-      <Photo src={mountainImage} alt="" /><div className="tile-shade" /><div className="journey-copy"><h2>Join the Journey</h2><p>Create an account and make FORM/01 part of your everyday.</p></div>
-      <form onSubmit={(event) => { event.preventDefault(); onJoin(String(new FormData(event.currentTarget).get("email")).trim()); }}><label className="sr-only" htmlFor="journey-email">Your email address</label><input id="journey-email" type="email" name="email" placeholder="Enter your email" required /><button type="submit" aria-label="Create your FORM/01 account"><ArrowRight size={18} /></button></form>
-    </section>
   </div>;
-}
-
-function productsImage(productType: string, sections: HomepageSection[]) {
-  const section = sections.find((section) => text(section.content.product_type).toUpperCase() === productType);
-  return imageUrl(record(section?.content.image).desktop_url) || imageUrl(section?.products?.[0]?.image_urls?.[0]) || imageUrl(section?.products?.[0]?.image_url);
 }

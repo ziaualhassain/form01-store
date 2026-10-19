@@ -9,12 +9,41 @@ export type Cart = { id: string; currency: string; items: CartItem[]; subtotal_m
 export type CheckoutQuote = { currency: string; subtotal_minor: number; discount_minor: number; shipping_minor: number; tax_minor: number; total_minor: number };
 export type Address = { id: string; recipient_name: string; phone?: string | null; line1: string; line2?: string | null; city: string; state_or_region?: string | null; postal_code: string; country_code: string };
 export type Profile = { id: string; email: string; status: string; roles: string[]; first_name?: string | null; last_name?: string | null; display_name?: string | null; phone?: string | null; addresses?: Address[]; orders?: Array<{ id: string; order_number: string; status: string; payment_status: string; fulfilment_status: string; total_minor: number; placed_at?: string | null }>; wishlist?: Array<{ id: string; product_id: string; title: string; slug: string; image_url?: string | null }> };
-export type Order = { id: string; order_number: string; status: string; payment_status: string; fulfilment_status: string; currency: string; subtotal_minor: number; total_minor: number; placed_at?: string | null; items: Array<{ id: string; product_name_snapshot: string; variant_label_snapshot?: string | null; sku_snapshot: string; quantity: number; line_total_minor: number }>; payments: Array<{ id: string; provider: string; status: string; amount_minor: number; currency: string }>; shipments: Array<{ id: string; carrier: string; tracking_number?: string | null; tracking_url?: string | null; status: string }> };
+export type OrderAddress = Address & { locality?: string | null; delivery_instructions?: string | null };
+export type Order = {
+  id: string; order_number: string; status: string; payment_status: string; fulfilment_status: string;
+  currency: string; subtotal_minor: number; total_minor: number;
+  discount_minor?: number; shipping_minor?: number; tax_minor?: number;
+  contact_email?: string; placed_at?: string | null;
+  shipping_address?: OrderAddress | null; billing_address?: OrderAddress | null;
+  items: Array<{ id: string; product_name_snapshot: string; product_slug_snapshot?: string; variant_label_snapshot?: string | null; sku_snapshot: string; unit_price_minor?: number; quantity: number; line_total_minor: number }>;
+  payments: Array<{ id: string; provider: string; status: string; amount_minor: number; currency: string }>;
+  shipments: Array<{ id: string; carrier: string; tracking_number?: string | null; tracking_url?: string | null; status: string; shipped_at?: string | null; delivered_at?: string | null }>;
+};
 export type HomepageSection = { id: string; type: string; position: number; content: Record<string, unknown>; products?: Product[] };
 
 const baseUrl = apiBaseUrl;
 export class ApiError extends Error { status: number; constructor(status: number, message: string) { super(message); this.status = status; } }
-export const apiErrorMessage = (error: unknown) => { if (!(error instanceof ApiError)) return "The request failed"; try { const payload = JSON.parse(error.message) as { detail?: string; error?: { message?: string } }; return payload.detail || payload.error?.message || error.message; } catch { return error.message; } };
+export const apiErrorMessage = (error: unknown) => {
+  if (!(error instanceof ApiError)) return "The request failed. Please try again.";
+  let payload: unknown;
+  try { payload = JSON.parse(error.message); } catch { return error.message; }
+  if (!payload || typeof payload !== "object") return error.message;
+  if ("detail" in payload && typeof payload.detail === "string") return payload.detail;
+  if ("error" in payload && payload.error && typeof payload.error === "object") {
+    const apiError = payload.error;
+    if ("details" in apiError && Array.isArray(apiError.details)) {
+      const messages = apiError.details.flatMap((detail: unknown) => {
+        if (!detail || typeof detail !== "object" || !("msg" in detail) || typeof detail.msg !== "string") return [];
+        const field = "loc" in detail && Array.isArray(detail.loc) ? detail.loc.filter((part: unknown) => typeof part === "string" && part !== "body").join(".") : "";
+        return [`${field ? `${field}: ` : ""}${detail.msg}`];
+      });
+      if (messages.length) return messages.join(" ");
+    }
+    if ("message" in apiError && typeof apiError.message === "string") return apiError.message;
+  }
+  return error.message;
+};
 export const getToken = () => isMockMode || typeof window === "undefined" ? null : localStorage.getItem("form01_store_token");
 export const clearToken = () => typeof window !== "undefined" && localStorage.removeItem("form01_store_token");
 
@@ -55,8 +84,10 @@ export const storeApi = {
   cart: () => request<Cart>("/cart"),
   addCartItem: (variant_id: string, quantity: number) => request<CartItem>("/cart/items", { method: "POST", body: JSON.stringify({ variant_id, quantity }) }),
   removeCartItem: (itemId: string) => request<void>(`/cart/items/${encodeURIComponent(itemId)}`, { method: "DELETE" }),
-  quote: () => request<CheckoutQuote>("/checkout/quote", { method: "POST", body: JSON.stringify({}) }),
+  quote: (shipping_address_id: string) => request<CheckoutQuote>("/checkout/quote", { method: "POST", body: JSON.stringify({ shipping_address_id }) }),
   addresses: () => request<Address[]>("/me/addresses"),
+  addWishlist: (product_id: string) => request("/me/wishlist", { method: "POST", body: JSON.stringify({ product_id }) }),
+  removeWishlist: (productId: string) => request<void>(`/me/wishlist/${encodeURIComponent(productId)}`, { method: "DELETE" }),
   createAddress: (payload: Record<string, unknown>) => request<Address>("/me/addresses", { method: "POST", body: JSON.stringify(payload) }),
   profile: () => request<Profile>("/me/profile"),
   updateProfile: (payload: Record<string, unknown>) => request<Profile>("/me/profile", { method: "PATCH", body: JSON.stringify(payload) }),

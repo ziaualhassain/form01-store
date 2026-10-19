@@ -7,6 +7,7 @@ import "./shop.css";
 import "./product.css";
 import "./collections.css";
 import "./account.css";
+import "./orders.css";
 import "./cart.css";
 import "./footer.css";
 

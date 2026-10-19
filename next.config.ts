@@ -7,6 +7,9 @@ if (mock !== "true" && mock !== "false") {
 
 const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_MOCK: mock },
+  async redirects() {
+    return [{ source: "/products", destination: "/shop", permanent: false }];
+  },
   /* config options here */
   cacheComponents: true,
   partialPrefetching: true,

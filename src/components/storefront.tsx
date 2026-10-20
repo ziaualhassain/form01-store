@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ArrowRight, Check, CircleUserRound, Menu, Package, Search, ShoppingBag, X } from "lucide-react";
 import { Address, ApiError, Cart, CartItem, HomepageSection, Order, Product, Profile, Variant, apiErrorMessage, getToken, storeApi } from "@/lib/api";
 import DynamicHomepage from "@/components/dynamic-homepage";
@@ -16,6 +16,7 @@ import { mockAddresses, mockCart, mockOrders, mockProfile, mockProducts } from "
 import CartPage from "@/components/cart-page";
 import StoreFooter from "@/components/store-footer";
 import PolicyPage from "@/components/policy-page";
+import OrderHistory from "@/components/order-history";
 
 type Panel = "cart" | "account" | "address" | "profile" | "confirmation" | "orders" | "earlyAccess" | null;
 const money = (minor: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(minor / 100);
@@ -36,6 +37,9 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
   const [wishlist, setWishlist] = useState<string[]>([]);
+  const wishlistPending = useRef(new Set<string>());
+  const checkoutAttempt = useRef<{ signature: string; key: string } | null>(null);
+  const ordersRefreshing = useRef(false);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
   const [panel, setPanel] = useState<Panel>(cartPage ? "cart" : null);
@@ -53,7 +57,6 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
   const [shopVisible, setShopVisible] = useState(shopPage);
   const [collectionsVisible, setCollectionsVisible] = useState(collectionsPage);
   const [collectionId, setCollectionId] = useState("");
-  const [joinEmail, setJoinEmail] = useState("");
   const [accountVisible, setAccountVisible] = useState(accountPage);
   const [policyVisible, setPolicyVisible] = useState(Boolean(policySlug));
   const [accountStatus, setAccountStatus] = useState<"loading" | "ready" | "unavailable" | "signed-out">(isMockMode ? "ready" : "loading");
@@ -72,12 +75,15 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
   }, [notify]);
   const loadAccount = useCallback(async () => {
     if (isMockMode) { setAccountStatus("ready"); return; }
-    if (!getToken()) { setAccountStatus("signed-out"); return; }
+    const token = getToken();
+    if (!token) { setAccountStatus("signed-out"); return; }
     setAccountStatus("loading");
     try {
       const [nextProfile, nextOrders, nextAddresses] = await Promise.all([storeApi.profile(), storeApi.orders(), storeApi.addresses()]);
-      setProfile(nextProfile); setOrders(nextOrders); setAddresses(nextAddresses); setAccountStatus("ready");
+      if (getToken() !== token) return;
+      setProfile(nextProfile); setOrders(nextOrders); setAddresses(nextAddresses); setWishlist((nextProfile.wishlist || []).map((item) => item.product_id)); setAccountStatus("ready");
     } catch (error) {
+      if (getToken() !== token) return;
       setAccountStatus(error instanceof ApiError && error.status === 401 ? "signed-out" : "unavailable");
       notify(apiErrorMessage(error));
     }
@@ -89,6 +95,28 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     try { setCart(await storeApi.cart()); setCartStatus("ready"); }
     catch (error) { setCartStatus(error instanceof ApiError && error.status === 401 ? "signed-out" : "unavailable"); notify(apiErrorMessage(error)); }
   }, [notify]);
+  const refreshOrders = useCallback(async () => {
+    const token = getToken();
+    if (isMockMode || !token || ordersRefreshing.current) return;
+    ordersRefreshing.current = true;
+    try {
+      const latest = await storeApi.orders();
+      if (getToken() === token) setOrders(latest);
+    } catch (error) { if (getToken() === token) notify(apiErrorMessage(error)); }
+    finally { ordersRefreshing.current = false; }
+  }, [notify]);
+  useEffect(() => {
+    if (isMockMode || (!accountVisible && panel !== "orders")) return;
+    const refresh = () => { if (document.visibilityState === "visible") void refreshOrders(); };
+    const timer = window.setInterval(refresh, 30000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [accountVisible, panel, refreshOrders]);
   const loadLive = useCallback(async () => {
     await Promise.all([
       loadPublished(),
@@ -204,9 +232,22 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     finally { setLoading(false); }
   };
   const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); try { const updated = await storeApi.updateProfile({ first_name: data.get("first_name"), last_name: data.get("last_name"), display_name: data.get("display_name"), phone: data.get("phone") }); setProfile(updated); setPanel(null); notify("Profile updated"); } catch (error) { notify(apiErrorMessage(error)); } };
-  const logout = () => { localStorage.removeItem("form01_store_token"); setProfile(null); setCart(null); setOrders([]); setAddresses([]); setSelectedAddress(null); setPanel(null); setAccountStatus("signed-out"); notify("You have been signed out"); };
+  const logout = () => { localStorage.removeItem("form01_store_token"); checkoutAttempt.current = null; setProfile(null); setCart(null); setOrders([]); setAddresses([]); setWishlist([]); setSelectedAddress(null); setPanel(null); setAccountStatus("signed-out"); notify("You have been signed out"); };
   const openOrders = async () => { if (isMockMode) { setPanel("orders"); return; } if (!getToken()) { setPanel("account"); return; } try { setOrders(await storeApi.orders()); setPanel("orders"); } catch (error) { notify(apiErrorMessage(error)); } };
-  const toggleWishlist = (product: Product) => { setWishlist((current) => { const next = current.includes(product.id) ? current.filter((id) => id !== product.id) : [...current, product.id]; localStorage.setItem("form01_store_wishlist", JSON.stringify(next)); return next; }); };
+  const toggleWishlist = async (product: Product) => {
+    if (wishlistPending.current.has(product.id)) return;
+    if (isMockMode || !getToken()) {
+      setWishlist((current) => { const next = current.includes(product.id) ? current.filter((id) => id !== product.id) : [...current, product.id]; localStorage.setItem("form01_store_wishlist", JSON.stringify(next)); return next; });
+      return;
+    }
+    wishlistPending.current.add(product.id);
+    try {
+      if (wishlist.includes(product.id)) await storeApi.removeWishlist(product.id);
+      else await storeApi.addWishlist(product.id);
+      await loadAccount();
+    } catch (error) { notify(apiErrorMessage(error)); }
+    finally { wishlistPending.current.delete(product.id); }
+  };
   const saveAddress = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { recipient_name: data.get("recipient_name"), phone: data.get("phone"), line1: data.get("line1"), city: data.get("city"), state_or_region: data.get("state_or_region"), postal_code: data.get("postal_code"), country_code: data.get("country_code"), is_default_shipping: true }; setLoading(true); try { const address = await storeApi.createAddress(payload); setAddresses((current) => [address, ...current]); setSelectedAddress(address); setPanel(addressFromAccount ? null : "cart"); notify("Delivery address saved"); } catch (error) { notify(apiErrorMessage(error)); } finally { setLoading(false); } };
   const beginCheckout = async () => {
     if (isMockMode) { notify("Checkout is disabled in mock mode. No payment or order will be created."); return; }
@@ -216,15 +257,25 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     try {
       if (apiMode !== "live") { notify("Connect the middleware API to checkout"); return; }
       if (!cart?.items.length) { notify("Your cart is empty"); return; }
-      const checkout = await storeApi.checkout(crypto.randomUUID(), selectedAddress.id);
-      if (!checkout.provider_order_id) { notify("Payment setup is not available"); return; }
       const razorpay = (window as Window & { Razorpay?: new (options: Record<string, unknown>) => { open: () => void } }).Razorpay;
       if (!razorpay) { notify("Load Razorpay Checkout to continue"); return; }
+      const signature = JSON.stringify([cart.id, cart.items.map((item) => [item.variant_id, item.quantity]), cart.total_minor, selectedAddress.id]);
+      if (checkoutAttempt.current?.signature !== signature) checkoutAttempt.current = { signature, key: crypto.randomUUID() };
+      const checkout = await storeApi.checkout(checkoutAttempt.current.key, selectedAddress.id);
+      if (!checkout.provider_order_id) { notify("Payment setup is not available"); return; }
       const gateway = new razorpay({ key: checkout.provider_key_id, amount: checkout.total_minor, currency: "INR", name: "FORM/01", order_id: checkout.provider_order_id, handler: async (response: Record<string, string>) => {
-        await storeApi.verifyPayment(response);
-        const confirmed = await storeApi.order(checkout.order_number);
-        setConfirmedOrder(confirmed); setOrders((current) => [confirmed, ...current.filter((order) => order.id !== confirmed.id)]);
-        setPanel("confirmation"); notify("Order confirmed");
+        setLoading(true);
+        try {
+          await storeApi.verifyPayment(response);
+          const confirmed = await storeApi.order(checkout.order_number);
+          checkoutAttempt.current = null;
+          await loadCart();
+          setConfirmedOrder(confirmed); setOrders((current) => [confirmed, ...current.filter((order) => order.id !== confirmed.id)]);
+          setPanel("confirmation"); notify("Payment response received. Check your order's payment status.");
+        } catch (error) {
+          console.error("Unable to confirm checkout payment", error);
+          notify(`We couldn't confirm payment for ${checkout.order_number}. Check Your Orders or contact support before paying again.`);
+        } finally { setLoading(false); }
       } });
       gateway.open();
     } catch (error) { notify(apiErrorMessage(error)); }
@@ -256,10 +307,10 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     {menuOpen && <div id={menuId} className="mobile-menu"><Link href="/shop" onClick={() => setMenuOpen(false)}>Shop</Link><Link href="/collections" onClick={() => setMenuOpen(false)}>Collections</Link><button onClick={() => { setMenuOpen(false); void openOrders(); }}>Your Orders</button></div>}
     </header>
     {isMockMode && <div className="mock-mode-notice" role="status">Mock preview · Sample products and imagery · Checkout disabled</div>}
-    {cartVisible && <CartPage cart={cart} products={products} status={cartStatus} catalogueStatus={catalogueStatus} busy={loading} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onQuantity={changeCartQuantity} onCheckout={() => void beginCheckout()} onRetry={() => { void loadCart(); void loadCatalogue(); }} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} />}
+    {cartVisible && <CartPage selectedAddress={selectedAddress} onAddress={() => { setAddressFromAccount(false); setPanel("address"); }} cart={cart} products={products} status={cartStatus} catalogueStatus={catalogueStatus} busy={loading} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onQuantity={changeCartQuantity} onCheckout={() => void beginCheckout()} onRetry={() => { void loadCart(); void loadCatalogue(); }} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} />}
     {!cartVisible && policyVisible && <PolicyPage key={policySlug} slug={policySlug} />}
     {!cartVisible && !policyVisible && <>
-    {accountVisible ? <AccountDashboard profile={isMockMode ? mockProfile : profile} orders={isMockMode ? mockOrders : orders} addresses={isMockMode ? mockAddresses : addresses} products={products} wishlist={wishlist} status={accountStatus} onRetry={() => void loadAccount()} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} onEdit={() => { if (isMockMode) notify("Profile editing is disabled in mock preview."); else setPanel("profile"); }} onAddAddress={() => { if (isMockMode) notify("Address changes are disabled in mock preview."); else { setAddressFromAccount(true); setPanel("address"); } }} onLogout={logout} onProduct={openProduct} onWishlist={toggleWishlist} /> : selectedProduct ? <ProductDetail key={selectedProduct.id} product={selectedProduct} products={products} cart={cart} wishlist={wishlist} loading={loading} onAdd={addToCart} onWishlist={toggleWishlist} onProduct={openProduct} onBack={backToShop} backLabel={collectionsVisible ? "Collections" : "Shop"} onCategory={filterByProductType} /> : collectionsVisible ? <CollectionsPage sections={homepageSections} products={products} status={homepageStatus} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onNotify={() => setPanel("earlyAccess")} selectedId={collectionId} onDrop={(id) => { setCollectionId(id); window.location.hash = `collection/${encodeURIComponent(id)}`; }} onRetry={() => void loadLive()} /> : shopVisible ? <ShopCatalogue products={products} status={catalogueStatus} query={query} category={category} onCategory={setCategory} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onRetry={() => void loadCatalogue()} /> : <DynamicHomepage sections={homepageSections} products={products} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onRetry={() => void loadCatalogue()} status={homepageStatus} onProductType={filterByProductType} onProduct={openProduct} onJoin={(email) => { setJoinEmail(email); setAuthMode("register"); setPanel("account"); }} />}
+    {accountVisible ? <AccountDashboard profile={isMockMode ? mockProfile : profile} orders={isMockMode ? mockOrders : orders} addresses={isMockMode ? mockAddresses : addresses} products={products} wishlist={wishlist} status={accountStatus} onRetry={() => void loadAccount()} onRefreshOrders={() => void refreshOrders()} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} onEdit={() => { if (isMockMode) notify("Profile editing is disabled in mock preview."); else setPanel("profile"); }} onAddAddress={() => { if (isMockMode) notify("Address changes are disabled in mock preview."); else { setAddressFromAccount(true); setPanel("address"); } }} onLogout={logout} onProduct={openProduct} onWishlist={toggleWishlist} /> : selectedProduct ? <ProductDetail key={selectedProduct.id} product={selectedProduct} products={products} cart={cart} wishlist={wishlist} loading={loading} onAdd={addToCart} onWishlist={toggleWishlist} onProduct={openProduct} onBack={backToShop} backLabel={collectionsVisible ? "Collections" : "Shop"} onCategory={filterByProductType} /> : collectionsVisible ? <CollectionsPage sections={homepageSections} products={products} status={homepageStatus} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onNotify={() => setPanel("earlyAccess")} selectedId={collectionId} onDrop={(id) => { setCollectionId(id); window.location.hash = `collection/${encodeURIComponent(id)}`; }} onRetry={() => void loadLive()} /> : shopVisible ? <ShopCatalogue products={products} status={catalogueStatus} query={query} category={category} onCategory={setCategory} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onRetry={() => void loadCatalogue()} /> : <DynamicHomepage sections={homepageSections} products={products} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onRetry={() => void loadCatalogue()} status={homepageStatus} onProductType={filterByProductType} onProduct={openProduct} />}
     </>}
     <StoreFooter mobileVisible={accountVisible && !cartVisible && !policyVisible} />
     <nav className="mobile-bottom-nav" aria-label="Quick navigation"><Link href="/" aria-current={!shopVisible && !collectionsVisible && !accountVisible && !cartVisible && !policyVisible ? "page" : undefined}><HomeIcon size={19} /><span>Home</span></Link><Link href="/shop" aria-current={shopVisible && !collectionsVisible && !accountVisible && !cartVisible && !policyVisible ? "page" : undefined}><Search size={19} /><span>Shop</span></Link><Link href="/collections" aria-current={collectionsVisible && !accountVisible && !cartVisible && !policyVisible ? "page" : undefined}><Grid2X2 size={19} /><span>Collections</span></Link><button onClick={openAccount} aria-current={accountVisible && !cartVisible && !policyVisible ? "page" : undefined}><CircleUserRound size={19} /><span>Account</span></button></nav>
@@ -268,8 +319,8 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     {panel === "profile" && <Modal title="Your FORM/01 profile" onClose={() => setPanel(null)}><form className="account-form" onSubmit={saveProfile}><span className="kicker">Account details</span><input name="display_name" defaultValue={profile?.display_name || ""} placeholder="Display name" /><input name="first_name" defaultValue={profile?.first_name || ""} placeholder="First name" /><input name="last_name" defaultValue={profile?.last_name || ""} placeholder="Last name" /><input name="phone" defaultValue={profile?.phone || ""} placeholder="Phone number" /><span className="kicker">Wishlist / {wishlist.length} saved</span><div className="wishlist-list">{products.filter((product) => wishlist.includes(product.id)).map((product) => <button type="button" key={product.id} onClick={() => openProduct(product)}>{product.title}<ArrowRight size={14} /></button>)}</div><button className="add-button" type="submit">Save profile <Check size={16} /></button><button className="switch-auth" type="button" onClick={logout}>Sign out</button></form></Modal>}
     {panel === "confirmation" && confirmedOrder && <Modal title="Order placed" onClose={() => setPanel(null)}><div className="confirmation-panel"><div className="confirmation-mark"><Check size={24} /></div><span className="kicker">Thank you for choosing FORM/01</span><h3>{confirmedOrder.order_number}</h3><p>Placed {date(confirmedOrder.placed_at)} · Payment {confirmedOrder.payment_status}</p><div className="confirmation-items">{confirmedOrder.items.map((item) => <div key={item.id}><span>{item.product_name_snapshot} / {item.variant_label_snapshot || item.sku_snapshot} × {item.quantity}</span><strong>{money(item.line_total_minor)}</strong></div>)}</div><div className="cart-total"><span>Total</span><strong>{money(confirmedOrder.total_minor)}</strong></div><button className="add-button" onClick={() => setPanel("orders")}>Track this order <Package size={16} /></button></div></Modal>}
     {panel === "address" && <Modal title="Delivery address" onClose={() => setPanel(addressFromAccount ? null : "cart")}><div className="address-panel">{!addressFromAccount && addresses.length > 0 && <div className="saved-addresses"><span className="kicker">Saved addresses</span>{addresses.map((address) => <button type="button" className={selectedAddress?.id === address.id ? "selected-address" : ""} onClick={() => { setSelectedAddress(address); setPanel("cart"); }} key={address.id}><strong>{address.recipient_name}</strong><small>{address.line1}, {address.city} · {address.postal_code}</small></button>)}</div>}<form className="account-form" onSubmit={saveAddress}><span className="kicker">New delivery address</span><input name="recipient_name" placeholder="Full name" required /><input name="phone" placeholder="Phone number" required /><input name="line1" placeholder="Address line" required /><div className="address-grid"><input name="city" placeholder="City" required /><input name="state_or_region" placeholder="State" required /><input name="postal_code" inputMode="numeric" pattern="[1-9][0-9]{5}" placeholder="6-digit PIN code" required /></div><input name="country_code" defaultValue="IN" maxLength={2} placeholder="Country code" required /><button className="add-button" type="submit" disabled={loading}>{loading ? "Saving..." : addressFromAccount ? "Save address" : "Save address and continue"}<ArrowRight size={16} /></button></form></div></Modal>}
-    {panel === "account" && <Modal title={authMode === "login" ? "Welcome back" : "Join FORM/01"} onClose={() => setPanel(null)}><form className="account-form" onSubmit={login}><p>{authMode === "login" ? "Sign in to place orders and track delivery." : "Create an account to keep your orders together."}</p><input name="email" type="email" placeholder="Email address" defaultValue={joinEmail} aria-label="Email address" required /><input name="password" type="password" placeholder="Password" minLength={8} aria-label="Password" required /><button className="add-button" type="submit">{loading ? "Connecting..." : authMode === "login" ? "Sign in" : "Create account"}</button><button className="switch-auth" type="button" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>{authMode === "login" ? "Need an account? Create one" : "Already have an account? Sign in"}</button></form></Modal>}
-    {panel === "orders" && <Modal title="Your orders" onClose={() => setPanel(null)}><div className="orders-panel">{orders.length ? orders.map((order) => <article className="customer-order" key={order.id}><div><span className="kicker">{order.order_number}</span><h3>{money(order.total_minor)}</h3><p>Placed {date(order.placed_at)}</p></div><div className="order-status"><span>{order.payment_status}</span><strong>{order.fulfilment_status}</strong></div>{order.shipments[0] && <div className="tracking-card"><div><span className="kicker">Delivery tracking</span><strong>{order.shipments[0].carrier}</strong><small>{order.shipments[0].status}</small></div><span>{order.shipments[0].tracking_number || "Tracking pending"}</span>{order.shipments[0].tracking_url && <a href={order.shipments[0].tracking_url} target="_blank" rel="noreferrer">Track package <ArrowRight size={14} /></a>}</div>}</article>) : <div className="empty-cart"><Package size={26} /><h3>No orders yet.</h3><p>Your next order will appear here with its delivery status.</p></div>}</div></Modal>}
+    {panel === "account" && <Modal title={authMode === "login" ? "Welcome back" : "Join FORM/01"} onClose={() => setPanel(null)}><form className="account-form" onSubmit={login}><p>{authMode === "login" ? "Sign in to place orders and track delivery." : "Create an account to keep your orders together."}</p><input name="email" type="email" placeholder="Email address" aria-label="Email address" required /><input name="password" type="password" placeholder="Password" minLength={8} aria-label="Password" required /><button className="add-button" type="submit">{loading ? "Connecting..." : authMode === "login" ? "Sign in" : "Create account"}</button><button className="switch-auth" type="button" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>{authMode === "login" ? "Need an account? Create one" : "Already have an account? Sign in"}</button></form></Modal>}
+    {panel === "orders" && <Modal title="Your orders" onClose={() => setPanel(null)}><OrderHistory orders={isMockMode ? mockOrders : orders} products={products} onRefresh={() => void refreshOrders()} onProduct={openProduct} /></Modal>}
     {toast && <div className="store-toast">{toast}</div>}
   </main>;
 }

@@ -1,11 +1,12 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Bell, CircleHelp, CreditCard, Heart, Home, LogOut, MapPin, Package, Pencil, UserRound } from "lucide-react";
 import type { Address, Order, Product, Profile } from "@/lib/api";
 import { isMockMode } from "@/lib/store-config";
+import OrderHistory from "./order-history";
 
 const navigation = [
   { label: "Overview", Icon: Home }, { label: "Orders", Icon: Package },
@@ -13,15 +14,13 @@ const navigation = [
   { label: "Payment Methods", Icon: CreditCard }, { label: "Account Details", Icon: UserRound },
   { label: "Notifications", Icon: Bell }, { label: "Support", Icon: CircleHelp },
 ];
-const money = (amount: number, currency: string) => new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 2 }).format(amount / 100);
-const date = (value?: string | null) => value ? new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value)) : "Date unavailable";
 
 function Thumbnail({ src, alt }: { src?: string | null; alt: string }) {
   const [failed, setFailed] = useState("");
   return src && failed !== src ? <Image src={src} alt={alt} fill unoptimized sizes="100px" onError={() => setFailed(src)} /> : <span className="account-photo-placeholder">F/01</span>;
 }
 
-export default function AccountDashboard({ profile, orders, addresses, products, wishlist, status, onRetry, onSignIn, onEdit, onAddAddress, onLogout, onProduct, onWishlist }: {
+export default function AccountDashboard({ profile, orders, addresses, products, wishlist, status, onRetry, onRefreshOrders, onSignIn, onEdit, onAddAddress, onLogout, onProduct, onWishlist }: {
   profile: Profile | null;
   orders: Order[];
   addresses: Address[];
@@ -29,6 +28,7 @@ export default function AccountDashboard({ profile, orders, addresses, products,
   wishlist: string[];
   status: "loading" | "ready" | "unavailable" | "signed-out";
   onRetry: () => void;
+  onRefreshOrders: () => void;
   onSignIn: () => void;
   onEdit: () => void;
   onAddAddress: () => void;
@@ -37,13 +37,11 @@ export default function AccountDashboard({ profile, orders, addresses, products,
   onWishlist: (product: Product) => void;
 }) {
   const [section, setSection] = useState("Overview");
-  const [expandedOrder, setExpandedOrder] = useState("");
-  const orderDetailsId = useId();
   const savedProducts = products.filter((product) => wishlist.includes(product.id));
   const remoteWishlist = (profile?.wishlist || []).filter((item) => !savedProducts.some((product) => product.id === item.product_id));
   const wishlistCount = new Set([...wishlist, ...(profile?.wishlist || []).map((item) => item.product_id)]).size;
   const name = profile?.display_name || profile?.first_name || "there";
-  const show = (label: string) => { setSection(label); setExpandedOrder(""); window.scrollTo({ top: 0 }); };
+  const show = (label: string) => { setSection(label); window.scrollTo({ top: 0 }); };
   const overview = section === "Overview";
 
   if (status !== "ready") return <section className="account-gate"><span className="kicker">My Account</span><h1>{status === "loading" ? "Making yourself at home." : status === "signed-out" ? "Your everyday, all together." : "We couldn't load your account."}</h1><p role="status">{status === "loading" ? "Loading your profile, orders and addresses..." : status === "signed-out" ? "Sign in to manage your orders, addresses and wishlist." : "Your account data is unavailable. Please try again."}</p>{status !== "loading" && <button onClick={status === "signed-out" ? onSignIn : onRetry}>{status === "signed-out" ? "Sign in / Create account" : "Try again"} <ArrowRight size={15} /></button>}</section>;
@@ -55,13 +53,7 @@ export default function AccountDashboard({ profile, orders, addresses, products,
       {!overview && <button className="account-back" onClick={() => show("Overview")}>Back to overview</button>}
       {overview && <div className="account-stats">{[{ label: "Orders", count: orders.length, Icon: Package, action: "View Orders" }, { label: "Wishlist", count: wishlistCount, Icon: Heart, action: "View Wishlist" }, { label: "Addresses", count: addresses.length, Icon: MapPin, action: "Manage Addresses" }, { label: "Payment Methods", count: null, Icon: CreditCard, action: "Payment information" }].map(({ label, count, Icon, action }) => <button key={label} onClick={() => show(label)}><span className="account-stat-icon"><Icon size={19} strokeWidth={1.5} /></span><div><span>{label}</span><strong>{count === null ? "At checkout" : count}</strong><small>{action} <ArrowRight size={12} /></small></div><ArrowRight className="account-stat-arrow" size={14} /></button>)}</div>}
 
-      {(overview || section === "Orders") && <section className="account-orders"><div className="account-section-heading"><h2>{overview ? "Recent Orders" : "Your Orders"}</h2>{overview && <button onClick={() => show("Orders")}>View All Orders <ArrowRight size={13} /></button>}</div>{!orders.length ? <p className="account-empty">No orders yet. Your next chapter starts in the <Link href="/shop">shop</Link>.</p> : (overview ? orders.slice(0, 3) : orders).map((order) => {
-        const first = order.items[0];
-        const product = products.find((product) => product.title === first?.product_name_snapshot);
-        const status = order.shipments[0]?.status || order.fulfilment_status;
-        const quantity = order.items.reduce((sum, item) => sum + item.quantity, 0);
-        return <article className="account-order" key={order.id}><div className="account-order-row"><span className="account-order-photo"><Thumbnail src={product?.image_urls?.[0] || product?.image_url} alt={first?.product_name_snapshot || "Order"} /></span><strong>{order.order_number.startsWith("#") ? order.order_number : `#${order.order_number}`}</strong><div className="account-order-description"><span>{date(order.placed_at)}</span><small>{quantity} {quantity === 1 ? "item" : "items"} · {order.items.map((item) => item.product_name_snapshot).join(", ")}</small></div><span className={`account-order-status ${status.toUpperCase() === "DELIVERED" ? "delivered" : ""}`}>{status.toLowerCase().replaceAll("_", " ")}</span><button onClick={() => setExpandedOrder(expandedOrder === order.id ? "" : order.id)} aria-expanded={expandedOrder === order.id} aria-controls={`${orderDetailsId}-${order.id}`} aria-label={`View details for ${order.order_number}`}><span>View Details <ArrowRight size={12} /></span><span className="account-order-arrow"><ArrowRight size={16} /></span></button></div>{expandedOrder === order.id && <div className="account-order-details" id={`${orderDetailsId}-${order.id}`}>{order.items.map((item) => <div key={item.id}><span>{item.product_name_snapshot} / {item.variant_label_snapshot || item.sku_snapshot} × {item.quantity}</span><strong>{money(item.line_total_minor, order.currency)}</strong></div>)}<p>Total: {money(order.total_minor, order.currency)} · Payment: {order.payment_status}</p>{order.shipments.map((shipment) => <p key={shipment.id}>{shipment.carrier} · {shipment.tracking_number || "Tracking pending"}{shipment.tracking_url && /^https?:\/\//.test(shipment.tracking_url) && <a href={shipment.tracking_url} target="_blank" rel="noreferrer"> Track package <ArrowRight size={12} /></a>}</p>)}</div>}</article>;
-      })}</section>}
+      {(overview || section === "Orders") && <><OrderHistory key={section} orders={orders} products={products} onRefresh={onRefreshOrders} onProduct={onProduct} recent={overview} />{overview && <button className="account-text-button" onClick={() => show("Orders")}>View All Orders <ArrowRight size={13} /></button>}</>}
 
       <div className={overview ? "account-saved-grid" : undefined}>
         {(overview || section === "Addresses") && <section><div className="account-section-heading"><h2>Saved Addresses</h2><button onClick={overview ? () => show("Addresses") : onAddAddress}>{overview ? "View All" : "Add Address"} <ArrowRight size={13} /></button></div><div className="account-addresses">{!addresses.length ? <p className="account-empty">No saved addresses yet.</p> : (overview ? addresses.slice(0, 2) : addresses).map((address) => <article key={address.id}><MapPin size={18} strokeWidth={1.5} /><div><strong>{address.recipient_name}</strong><p>{[address.line1, address.line2, address.city, address.state_or_region, address.postal_code, address.country_code].filter(Boolean).join(", ")}</p>{address.phone && <small>{address.phone}</small>}</div></article>)}</div>{section === "Addresses" && <p className="account-note">Address editing and removal are not available yet. You can add a new delivery address.</p>}</section>}

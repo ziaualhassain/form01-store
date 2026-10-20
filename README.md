@@ -33,11 +33,74 @@ MOCK=true npm run dev
 MOCK=false NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1 npm run dev
 ```
 
+If the site still shows "Mock preview" after setting `MOCK=false`, stop the
+existing development server (Ctrl+C in its terminal), then run `npm run dev`
+again from this project's directory and reload `http://localhost:3001`.
+The flag is resolved in `next.config.ts`; do not rely on hot reload to switch
+modes. For production, rebuild with `MOCK=false npm run build` before starting
+the server; changing the flag only when running `npm start` does not change an
+existing mock build.
+
 Mock photography uses sample CDN images plus the bundled EST.01 artwork, not
 the exact product renders in the reference screenshot. Replace the sample
 assets in `src/lib/mock-data.ts` or publish your real artwork in live mode.
 
 ## Homepage content
+
+### Categories and CDN artwork
+
+Homepage category tiles and shop filter tabs derive from ACTIVE products'
+`product_type` values. Categories with no published products disappear; sold-out
+published products keep their category visible. Stock-only filtering remains
+optional. Known type aliases (for example SHIRT and OVERSIZED_SHIRT) share a
+category; new types appear automatically. No category list or sample category
+photography is hardcoded into the homepage.
+
+In Admin > Homepage, append a `category_grid` section to the existing JSON array:
+
+```json
+{
+  "section_key": "shop-categories",
+  "section_type": "category_grid",
+  "position": 1,
+  "enabled": true,
+  "content": {
+    "items": [
+      {
+        "product_type": "SHIRT",
+        "image": {
+          "desktop_url": "https://your-cdn.example/categories/shirts.webp",
+          "mobile_url": "https://your-cdn.example/categories/shirts-mobile.webp",
+          "alt": "Everyday shirts"
+        }
+      }
+    ]
+  }
+}
+```
+
+Use real CDN URLs, not the example URLs. Existing publishing/scheduling controls
+apply. The middleware stores this in the same homepage database table and returns
+it through `/storefront/home`; no migration is needed. Without a category image,
+the storefront uses an available product image, then a neutral branded tile.
+Configuration never creates empty categories. Keep all other sections when
+saving: the Homepage endpoint replaces the entire array.
+
+Below Popular Choices, the homepage includes the shop catalogue with category,
+price, gender, stock, and sorting controls. It progressively renders 12 products
+at a time as the visitor approaches the bottom, with a Load more button as a
+keyboard/browser fallback. Filtering and sorting restart the visible batch.
+It uses the existing fully fetched live catalogue (not additional API requests
+per scroll), stops after all matching active products, and never repeats items
+to simulate an endless inventory. Product details and wishlist use the same
+handlers as the dedicated Shop page, whose rendering remains unchanged.
+
+Both shop surfaces share a warm ivory filter panel, compact category tabs,
+consistent sort/filter controls, and removable active-filter chips. Selections
+apply immediately; View products closes the panel, while Reset all clears
+category, gender, price and stock filters. Escape or Close filters returns focus
+to the filter toggle. On mobile, price controls form a two-column row and the
+remaining fields stack, with visible keyboard focus and inline price errors.
 
 ### Brand typography
 
@@ -97,11 +160,12 @@ Live API failures are displayed explicitly. Demo campaigns and collections
 are only enabled in mock mode. Publishing changes appears on
 the next page load.
 
-Shop links open `/shop`; existing `/#shop` campaign links and homepage category
+Shop links open `/shop`; `/products` redirects to `/shop` for existing admin
+hero CTAs. Existing `/#shop` campaign links and homepage category
 tiles also open the full shop view, preserving product details, cart,
-account, orders, and checkout. The Join the Journey form opens account
-registration with the email prefilled; it does not claim to subscribe users to a
-newsletter, since no subscription endpoint currently exists.
+account, orders, and checkout. The Join the Journey signup section has been
+removed from the homepage. Account registration remains available through
+the account sign-in flow.
 
 ## Collections
 
@@ -191,8 +255,11 @@ also open the cart via `#cart`, retaining the shared commerce state.
   Live updates send absolute quantities to `POST /cart/items`; removal uses
   `DELETE /cart/items/{item_id}` (requires the accompanying middleware update).
   Failed mutations display errors and do not silently remove products.
-- Live totals, shipping, discounts and tax come from `/checkout/quote`.
-  Checkout is disabled until the latest quote succeeds; failures offer retry.
+- Choose or create a delivery address before calculating live totals. The
+  middleware requires `shipping_address_id` in `POST /checkout/quote`.
+  Live totals, shipping, discounts and tax come from that quote.
+  Changing the address or cart invalidates the previous quote. Checkout is
+  disabled until the latest quote succeeds; failures offer retry.
   No shipping threshold or returns window is fabricated from the reference.
 - Product names, images, variant labels and prices resolve from the catalogue.
   Missing details are identified explicitly. Recommendations exclude products
@@ -203,6 +270,11 @@ also open the cart via `#cart`, retaining the shared commerce state.
   in session storage across navigation/reload. An empty mock cart stays empty.
   Existing live tokens are ignored and real checkout remains disabled.
 - Live signed-out, loading, unavailable/retry and empty states are explicit.
+- Checkout checks that Razorpay has loaded before creating an order. Unchanged
+  checkout attempts reuse an idempotency key for the current page lifetime;
+  this does not provide recovery across reloads. Payment-confirmation failures
+  show the order number and direct customers to orders/support before retrying.
+  The cart is refreshed after payment verification.
 
 ## My Account
 
@@ -219,11 +291,32 @@ Mobile section pages retain a visible title and return-to-overview control.
   failed (with retry) and empty states are explicit.
 - Edit Profile uses the existing profile update form. Add Address uses the
   existing address creation endpoint and returns to the dashboard, not the bag.
-  Address editing/deletion are not exposed without backend support.
+  Address editing/deletion are not currently exposed in the storefront.
 - Order rows expand actual line items, payment/fulfilment states and available
   tracking links. Counts reflect loaded account data, not screenshot numbers.
-- Wishlist combines locally saved catalogue items with profile wishlist data;
-  local hearts retain the existing browser persistence. Unavailable saved
+  The primary badge uses the order's `status` from the middleware, matching
+  admin updates; an older shipment or fulfilment status does not override it.
+  Live orders refresh every 30 seconds while the account/orders view is visible,
+  when returning to the tab, or through the Refresh orders button.
+- The order history follows the reference's larger cards, status tabs with
+  counts, product/variant thumbnails, and prominent tracking/detail actions.
+  Search by order number or product name. Overview shows the latest three;
+  Your Orders shows the full loaded history. The mobile menu and post-checkout
+  order overlay reuse the same order cards and details.
+- Expand Order details for the order's saved delivery address (not the current
+  profile address), contact email, subtotal/discount/shipping/tax/total,
+  payment records, and all shipment tracking numbers and available dates.
+  Missing address, charge, shipment, and item data are explicitly identified.
+  Support links include the order number; returns link to the existing policy,
+  not an unsupported return or refund workflow.
+- Progress uses the current order status. Only supplied placement, shipping,
+  and delivery dates are shown; no estimated arrival dates or milestone history
+  are invented. `FULFILLED` does not imply `DELIVERED`; cancelled/payment-failed
+  orders do not display an active delivery timeline. Tracking links require an
+  HTTP(S) URL. Multiple shipments each retain their own tracking action.
+- Signed-in wishlist hearts write to `/me/wishlist` and reload the authoritative
+  profile wishlist. Guest and mock wishlists remain browser-local; guest items
+  are not automatically merged on sign-in. Unavailable saved
   catalogue items are identified rather than replaced by sample products.
 - Payment methods are selected securely at checkout; saved card details,
   payment-method counts and notification preferences are not fabricated.
@@ -231,6 +324,36 @@ Mobile section pages retain a visible title and return-to-overview control.
 - Mock mode uses labeled sample profile, orders and addresses. Profile/address
   writes remain disabled; wishlist and product browsing still work.
 - No avatar endpoint exists, so the dashboard uses a neutral profile icon.
+
+## Integration verification
+
+Run `npm test` for the API adapter regression tests, `npm run lint`, and
+`MOCK=false npm run build` to validate a live build. No additional test
+dependencies are needed.
+
+The live integration check used the actual middleware application/database with
+a temporary CORS-enabled listener, not fixture catalogue responses. It verified
+58 API products rendered as 58 shop cards, backend hero copy/CTA, registration
+and login, profile updates, server-persisted wishlist add/remove, address
+creation, cart add/update/remove, and address-aware quotes. Two units at 9900
+minor units produced a 19800 quote and a displayed INR 198 total. Cart and
+account layouts had no horizontal overflow at 320, 390, and 1280 pixels.
+Synthetic cart items, wishlist entries, and the address were removed afterward;
+the synthetic customer account remains (there is no customer-delete API).
+
+Launch prerequisites still include:
+
+- Publish product photography (57 of the 58 checked products had no images)
+  and collection sections (none were published in the checked response).
+- Approve and publish policies; their current 409/unpublished states are
+  intentionally rendered rather than exposing draft text.
+- Confirm shipping, tax, and discount rules. The current middleware quote
+  returns zero for these charges; the storefront does not invent rates.
+- Complete an end-to-end Razorpay test payment and webhook/order-status check.
+  The SDK failed to initialize in the verification browser, so no payment or
+  order was created. The unavailable-SDK guard was verified instead; payment
+  settlement and cross-reload recovery are not certified.
+- Configure production API URL, HTTPS, CORS, and payment/webhook credentials.
 
 ## Shop catalogue
 

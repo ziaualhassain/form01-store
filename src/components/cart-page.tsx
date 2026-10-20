@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, ChevronRight, Minus, Package, Plus, ShieldCheck, ShoppingBag, Tag, Trash2, Truck } from "lucide-react";
-import { apiErrorMessage, storeApi, type Cart, type CartItem, type CheckoutQuote, type Product } from "@/lib/api";
+import { apiErrorMessage, storeApi, type Address, type Cart, type CartItem, type CheckoutQuote, type Product } from "@/lib/api";
 import { isMockMode } from "@/lib/store-config";
 import ShopCatalogue from "./shop-catalogue";
 
@@ -14,7 +14,9 @@ function CartPhoto({ src, title }: { src?: string | null; title: string }) {
   return src && failed !== src ? <Image src={src} alt={title} fill unoptimized sizes="(max-width: 640px) 85px, 110px" onError={() => setFailed(src)} /> : <span className="bag-photo-placeholder">FORM/01</span>;
 }
 
-export default function CartPage({ cart, products, status, catalogueStatus, busy, wishlist, onWishlist, onProduct, onQuantity, onCheckout, onRetry, onSignIn }: {
+export default function CartPage({ cart, products, status, catalogueStatus, busy, wishlist, onWishlist, onProduct, onQuantity, onCheckout, onRetry, onSignIn, selectedAddress, onAddress }: {
+  selectedAddress: Address | null;
+  onAddress: () => void;
   cart: Cart | null;
   products: Product[];
   status: "loading" | "ready" | "unavailable" | "signed-out";
@@ -30,20 +32,21 @@ export default function CartPage({ cart, products, status, catalogueStatus, busy
 }) {
   const discountId = useId();
   const [discountMessage, setDiscountMessage] = useState("");
-  const [quoteResult, setQuoteResult] = useState<{ cart: Cart; quote?: CheckoutQuote; error?: string } | null>(null);
+  const [quoteResult, setQuoteResult] = useState<{ cart: Cart; addressId: string; quote?: CheckoutQuote; error?: string } | null>(null);
   const [retryQuote, setRetryQuote] = useState(0);
   const quantity = cart?.items.reduce((sum, item) => sum + item.quantity, 0) || 0;
   useEffect(() => {
-    if (isMockMode || !cart?.items.length || status !== "ready") return;
+    if (isMockMode || !cart?.items.length || status !== "ready" || !selectedAddress) return;
     let cancelled = false;
-    storeApi.quote().then(
-      (quote) => { if (!cancelled) setQuoteResult({ cart, quote }); },
-      (error: unknown) => { if (!cancelled) setQuoteResult({ cart, error: apiErrorMessage(error) }); },
+    storeApi.quote(selectedAddress.id).then(
+      (quote) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, quote }); },
+      (error: unknown) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, error: apiErrorMessage(error) }); },
     );
     return () => { cancelled = true; };
-  }, [cart, status, retryQuote]);
-  const quote = quoteResult?.cart === cart ? quoteResult?.quote : undefined;
-  const quoteError = quoteResult?.cart === cart ? quoteResult?.error : undefined;
+  }, [cart, status, retryQuote, selectedAddress]);
+  const currentQuote = quoteResult?.cart === cart && quoteResult?.addressId === selectedAddress?.id;
+  const quote = currentQuote ? quoteResult?.quote : undefined;
+  const quoteError = currentQuote ? quoteResult?.error : undefined;
   const currency = quote?.currency || cart?.currency || "INR";
   const cartProducts = products.filter((product) => product.variants.some((variant) => cart?.items.some((item) => item.variant_id === variant.id)));
   const recommendations = products.filter((product) => product.status === "ACTIVE" && !cartProducts.some((item) => item.id === product.id)).slice(0, 4);
@@ -67,7 +70,18 @@ export default function CartPage({ cart, products, status, catalogueStatus, busy
         })}</div>
         <form className="bag-discount" onSubmit={(event) => { event.preventDefault(); setDiscountMessage("Discount codes are not supported by the current checkout service. No discount has been applied."); }}><label htmlFor={discountId}><Tag size={19} strokeWidth={1.5} />Have a discount code?</label><input id={discountId} name="discount" placeholder="Enter code (e.g. FORM01)" required /><button type="submit">Apply</button>{discountMessage && <p role="status">{discountMessage}</p>}</form>
       </div>
-      <aside className="bag-sidebar"><section className="bag-summary"><h2>Order Summary</h2><dl><div><dt>Subtotal ({quantity} {quantity === 1 ? "item" : "items"})</dt><dd>{money(quote?.subtotal_minor ?? cart?.subtotal_minor ?? 0, currency)}</dd></div><div><dt>Shipping</dt><dd>{isMockMode ? "Demo only" : quote ? money(quote.shipping_minor, currency) : "Pending"}</dd></div>{quote && quote.discount_minor > 0 && <div><dt>Discount</dt><dd>−{money(quote.discount_minor, currency)}</dd></div>}{quote && quote.tax_minor > 0 && <div><dt>Tax</dt><dd>{money(quote.tax_minor, currency)}</dd></div>}</dl><p className="bag-summary-note">{isMockMode ? "Sample cart. Shipping and payment are not processed." : "Shipping and tax reflect the current checkout quote."}</p><div className="bag-grand-total"><strong>{isMockMode ? "Demo total" : "Total"}</strong><strong>{isMockMode ? money(cart?.total_minor || 0, currency) : quote ? money(quote.total_minor, currency) : "Pending"}</strong></div>{!isMockMode && !quote && <p role={quoteError ? "alert" : "status"} className="bag-quote-status">{quoteError || "Calculating your checkout total..."}{quoteError && <button onClick={() => setRetryQuote((value) => value + 1)}>Retry quote</button>}</p>}{unavailableItems && <p className="bag-quote-status" role="status">Some product details are unavailable. Refresh the shop before checking out.</p>}<button className="bag-checkout" disabled={busy || (!isMockMode && (!quote || unavailableItems))} onClick={onCheckout}>{busy ? "Updating..." : "Proceed to Checkout"} <ArrowRight size={16} /></button><div className="bag-assurances"><div><Truck size={21} strokeWidth={1.2} /><span>Delivery</span><small>Quoted at checkout</small></div><div><Package size={21} strokeWidth={1.2} /><span>Considered Pieces</span><small>Everyday essentials</small></div><div><ShieldCheck size={21} strokeWidth={1.2} /><span>Payments</span><small>{isMockMode ? "Disabled in preview" : "Razorpay checkout"}</small></div></div></section>
+      <aside className="bag-sidebar">
+        {!isMockMode && <section className="bag-delivery"><h2>Delivery address</h2>{selectedAddress ? <p>{selectedAddress.recipient_name}<br />{selectedAddress.line1}, {selectedAddress.city} {selectedAddress.postal_code}</p> : <p>Choose a delivery address to calculate your total.</p>}<button onClick={onAddress} disabled={busy}>{selectedAddress ? "Change delivery address" : "Choose delivery address"}</button></section>}
+        <section className="bag-summary"><h2>Order Summary</h2>
+          <dl><div><dt>Subtotal ({quantity} {quantity === 1 ? "item" : "items"})</dt><dd>{money(quote?.subtotal_minor ?? cart?.subtotal_minor ?? 0, currency)}</dd></div><div><dt>Shipping</dt><dd>{isMockMode ? "Demo only" : quote ? money(quote.shipping_minor, currency) : "Pending"}</dd></div>{quote && quote.discount_minor > 0 && <div><dt>Discount</dt><dd>−{money(quote.discount_minor, currency)}</dd></div>}{quote && quote.tax_minor > 0 && <div><dt>Tax</dt><dd>{money(quote.tax_minor, currency)}</dd></div>}</dl>
+          <p className="bag-summary-note">{isMockMode ? "Sample cart. Shipping and payment are not processed." : "Shipping and tax reflect the current checkout quote."}</p>
+          <div className="bag-grand-total"><strong>{isMockMode ? "Demo total" : "Total"}</strong><strong>{isMockMode ? money(cart?.total_minor || 0, currency) : quote ? money(quote.total_minor, currency) : "Pending"}</strong></div>
+          {!isMockMode && selectedAddress && !quote && <p role={quoteError ? "alert" : "status"} className="bag-quote-status">{quoteError || "Calculating your checkout total..."}{quoteError && <button onClick={() => setRetryQuote((value) => value + 1)}>Retry quote</button>}</p>}
+          {unavailableItems && <p className="bag-quote-status" role="status">Some product details are unavailable. Refresh the shop before checking out.</p>}
+          <button className="bag-checkout" disabled={busy || (!isMockMode && (!selectedAddress || !quote || unavailableItems))} onClick={onCheckout}>{busy ? "Updating..." : "Proceed to Checkout"} <ArrowRight size={16} /></button>
+          <p className="bag-summary-note">Review our <Link href="/policies/terms-and-conditions">terms</Link>, <Link href="/policies/shipping-and-delivery">shipping</Link> and <Link href="/policies/returns-and-refunds">returns policies</Link> before ordering.</p>
+          <div className="bag-assurances"><div><Truck size={21} strokeWidth={1.2} /><span>Delivery</span><small>Quoted at checkout</small></div><div><Package size={21} strokeWidth={1.2} /><span>Considered Pieces</span><small>Everyday essentials</small></div><div><ShieldCheck size={21} strokeWidth={1.2} /><span>Payments</span><small>{isMockMode ? "Disabled in preview" : "Razorpay checkout"}</small></div></div>
+        </section>
         <div className="bag-information"><details><summary><Truck size={16} />Shipping Information <ChevronRight size={15} /></summary><p>Available delivery options and charges are confirmed by the checkout service. No free-shipping threshold has been configured.</p></details><details><summary><Package size={16} />Returns &amp; Exchanges <ChevronRight size={15} /></summary><p>A returns and exchanges policy has not been published yet. No return window is promised here.</p></details></div>
       </aside>
       {(recommendations.length > 0 || catalogueStatus !== "live") && <section className="bag-recommendations"><div className="home-section-heading"><h2>You may also like</h2><Link href="/shop">View All <ArrowRight size={14} /></Link></div><ShopCatalogue collectionView products={recommendations} status={catalogueStatus} query="" category="All" onCategory={() => {}} wishlist={wishlist} onWishlist={onWishlist} onProduct={onProduct} onRetry={onRetry} /></section>}

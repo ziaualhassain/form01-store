@@ -63,12 +63,13 @@
 .round-arrow { display: grid; place-items: center; flex-shrink: 0; width: 25px; height: 25px; border-radius: 50%; background: #f8f7f4; color: #20221f; }
 .collection-tile > .round-arrow, .category-tile > .round-arrow { position: absolute; right: 12px; bottom: 14px; }
 .category-section { padding-top: 25px; }
-.category-rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 13px; }
+.category-rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 13px; }
+.category-image-placeholder { display: grid; height: 100%; place-items: center; background: linear-gradient(135deg, #c6c0b3, #8e9180); font-size: 13px; letter-spacing: .2em; }
 .category-tile { position: relative; aspect-ratio: 1.25; border: 0; border-radius: 4px; overflow: hidden; text-align: left; padding: 0; background: #b9b3a7; color: #fff; }
 .category-photo { position: absolute; inset: 0; }
 .category-photo img { object-position: inherit; }
 .category-photo:has(img[src="/est_01_drop.png"]) img { width: 230% !important; max-width: none; left: -80% !important; }
-.category-name { position: absolute; left: 13px; bottom: 14px; font-size: 13px; }
+.category-name { position: absolute; left: 13px; bottom: 14px; font-size: 13px; text-transform: capitalize; }
 .category-tile .round-arrow { width: 22px; height: 22px; right: 10px; bottom: 12px; }
 .outline-link { display: inline-flex; align-items: center; gap: 20px; padding: 10px 20px; border: 1px solid #d8d4cd; border-radius: 3px; font-size: 11px; }
 .home-statement { padding: 50px 4%; background: #ddd6c9; }

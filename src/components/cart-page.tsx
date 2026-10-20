@@ -14,7 +14,9 @@ function CartPhoto({ src, title }: { src?: string | null; title: string }) {
   return src && failed !== src ? <Image src={src} alt={title} fill unoptimized sizes="(max-width: 640px) 85px, 110px" onError={() => setFailed(src)} /> : <span className="bag-photo-placeholder">FORM/01</span>;
 }
 
-export default function CartPage({ cart, products, status, catalogueStatus, busy, wishlist, onWishlist, onProduct, onQuantity, onCheckout, onRetry, onSignIn, selectedAddress, onAddress }: {
+export default function CartPage({ cart, products, status, catalogueStatus, busy, wishlist, onWishlist, onProduct, onQuantity, onCheckout, onRetry, onSignIn, selectedAddress, onAddress, couponCode, onCoupon }: {
+  couponCode: string;
+  onCoupon: (code: string) => void;
   selectedAddress: Address | null;
   onAddress: () => void;
   cart: Cart | null;
@@ -26,25 +28,25 @@ export default function CartPage({ cart, products, status, catalogueStatus, busy
   onWishlist: (product: Product) => void;
   onProduct: (product: Product) => void;
   onQuantity: (item: CartItem, quantity: number) => Promise<void>;
-  onCheckout: () => void;
+  onCheckout: (quote?: CheckoutQuote) => void;
   onRetry: () => void;
   onSignIn: () => void;
 }) {
   const discountId = useId();
-  const [discountMessage, setDiscountMessage] = useState("");
-  const [quoteResult, setQuoteResult] = useState<{ cart: Cart; addressId: string; quote?: CheckoutQuote; error?: string } | null>(null);
+  const [discountInput, setDiscountInput] = useState(couponCode);
+  const [quoteResult, setQuoteResult] = useState<{ cart: Cart; addressId: string; couponCode: string; quote?: CheckoutQuote; error?: string } | null>(null);
   const [retryQuote, setRetryQuote] = useState(0);
   const quantity = cart?.items.reduce((sum, item) => sum + item.quantity, 0) || 0;
   useEffect(() => {
     if (isMockMode || !cart?.items.length || status !== "ready" || !selectedAddress) return;
     let cancelled = false;
-    storeApi.quote(selectedAddress.id).then(
-      (quote) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, quote }); },
-      (error: unknown) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, error: apiErrorMessage(error) }); },
+    storeApi.quote(selectedAddress.id, couponCode).then(
+      (quote) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, couponCode, quote }); },
+      (error: unknown) => { if (!cancelled) setQuoteResult({ cart, addressId: selectedAddress.id, couponCode, error: apiErrorMessage(error) }); },
     );
     return () => { cancelled = true; };
-  }, [cart, status, retryQuote, selectedAddress]);
-  const currentQuote = quoteResult?.cart === cart && quoteResult?.addressId === selectedAddress?.id;
+  }, [cart, status, retryQuote, selectedAddress, couponCode]);
+  const currentQuote = quoteResult?.cart === cart && quoteResult?.addressId === selectedAddress?.id && quoteResult?.couponCode === couponCode;
   const quote = currentQuote ? quoteResult?.quote : undefined;
   const quoteError = currentQuote ? quoteResult?.error : undefined;
   const currency = quote?.currency || cart?.currency || "INR";
@@ -68,17 +70,19 @@ export default function CartPage({ cart, products, status, catalogueStatus, busy
             <button className="bag-remove" disabled={busy} onClick={() => void onQuantity(item, 0)} aria-label={`Remove ${product?.title || "item"} from cart`}><Trash2 size={15} strokeWidth={1.5} /></button>
           </article>;
         })}</div>
-        <form className="bag-discount" onSubmit={(event) => { event.preventDefault(); setDiscountMessage("Discount codes are not supported by the current checkout service. No discount has been applied."); }}><label htmlFor={discountId}><Tag size={19} strokeWidth={1.5} />Have a discount code?</label><input id={discountId} name="discount" placeholder="Enter code (e.g. FORM01)" required /><button type="submit">Apply</button>{discountMessage && <p role="status">{discountMessage}</p>}</form>
+        <form className="bag-discount" onSubmit={(event) => { event.preventDefault(); onCoupon(discountInput.trim().toUpperCase()); setRetryQuote((value) => value + 1); }}><label htmlFor={discountId}><Tag size={19} strokeWidth={1.5} />Have a discount code?</label><input id={discountId} name="discount" placeholder="Enter code (e.g. WELCOME10)" maxLength={40} value={discountInput} onChange={(event) => setDiscountInput(event.target.value)} required disabled={busy || isMockMode} /><button type="submit" disabled={busy || isMockMode || !selectedAddress || !discountInput.trim()}>Apply</button>{couponCode && <button type="button" disabled={busy} onClick={() => { onCoupon(""); setDiscountInput(""); }}>Remove code</button>}{isMockMode ? <p>Coupons are available in live checkout only.</p> : !selectedAddress ? <p>Choose a delivery address to validate a coupon.</p> : quote?.coupon_code ? <p role="status">{quote.coupon_code} applied. You save {money(quote.discount_minor, currency)}. Validated again at checkout.</p> : null}</form>
       </div>
       <aside className="bag-sidebar">
         {!isMockMode && <section className="bag-delivery"><h2>Delivery address</h2>{selectedAddress ? <p>{selectedAddress.recipient_name}<br />{selectedAddress.line1}, {selectedAddress.city} {selectedAddress.postal_code}</p> : <p>Choose a delivery address to calculate your total.</p>}<button onClick={onAddress} disabled={busy}>{selectedAddress ? "Change delivery address" : "Choose delivery address"}</button></section>}
         <section className="bag-summary"><h2>Order Summary</h2>
+          {quote?.gst_test && <p className="bag-quote-status" role="status"><strong>LOCAL GST TEST ONLY</strong><br />Draft rates added to a Razorpay Test payment. No real tax collected. Not a tax invoice.</p>}
           <dl><div><dt>Subtotal ({quantity} {quantity === 1 ? "item" : "items"})</dt><dd>{money(quote?.subtotal_minor ?? cart?.subtotal_minor ?? 0, currency)}</dd></div><div><dt>Shipping</dt><dd>{isMockMode ? "Demo only" : quote ? money(quote.shipping_minor, currency) : "Pending"}</dd></div>{quote && quote.discount_minor > 0 && <div><dt>Discount</dt><dd>−{money(quote.discount_minor, currency)}</dd></div>}{quote && quote.tax_minor > 0 && <div><dt>Tax</dt><dd>{money(quote.tax_minor, currency)}</dd></div>}</dl>
-          <p className="bag-summary-note">{isMockMode ? "Sample cart. Shipping and payment are not processed." : "Shipping and tax reflect the current checkout quote."}</p>
+          {quote?.gst_test && <dl><div><dt>TEST CGST</dt><dd>{money(quote.gst_test.cgst_minor, currency)}</dd></div><div><dt>TEST SGST</dt><dd>{money(quote.gst_test.sgst_minor, currency)}</dd></div><div><dt>TEST IGST</dt><dd>{money(quote.gst_test.igst_minor, currency)}</dd></div></dl>}
+          <p className="bag-summary-note">{isMockMode ? "Sample cart. Shipping and payment are not processed." : quote?.gst_test ? `Test GST: ${money(quote.tax_minor, currency)}. Saved draft version ${quote.gst_test.configuration_version}; delivery state ${quote.gst_test.destination_state_code}.` : quote ? "GST collection is not configured and no GST is added. Draft tax settings do not affect your checkout." : "Choose an address and review the backend quote before paying."}</p>
           <div className="bag-grand-total"><strong>{isMockMode ? "Demo total" : "Total"}</strong><strong>{isMockMode ? money(cart?.total_minor || 0, currency) : quote ? money(quote.total_minor, currency) : "Pending"}</strong></div>
           {!isMockMode && selectedAddress && !quote && <p role={quoteError ? "alert" : "status"} className="bag-quote-status">{quoteError || "Calculating your checkout total..."}{quoteError && <button onClick={() => setRetryQuote((value) => value + 1)}>Retry quote</button>}</p>}
           {unavailableItems && <p className="bag-quote-status" role="status">Some product details are unavailable. Refresh the shop before checking out.</p>}
-          <button className="bag-checkout" disabled={busy || (!isMockMode && (!selectedAddress || !quote || unavailableItems))} onClick={onCheckout}>{busy ? "Updating..." : "Proceed to Checkout"} <ArrowRight size={16} /></button>
+          <button className="bag-checkout" disabled={busy || (!isMockMode && (!selectedAddress || !quote || unavailableItems || cart?.items.some((item) => item.quantity > item.available_quantity)))} onClick={() => onCheckout(quote)}>{busy ? "Updating..." : quote?.gst_test ? "Proceed to TEST Checkout" : "Proceed to Checkout"} <ArrowRight size={16} /></button>
           <p className="bag-summary-note">Review our <Link href="/policies/terms-and-conditions">terms</Link>, <Link href="/policies/shipping-and-delivery">shipping</Link> and <Link href="/policies/returns-and-refunds">returns policies</Link> before ordering.</p>
           <div className="bag-assurances"><div><Truck size={21} strokeWidth={1.2} /><span>Delivery</span><small>Quoted at checkout</small></div><div><Package size={21} strokeWidth={1.2} /><span>Considered Pieces</span><small>Everyday essentials</small></div><div><ShieldCheck size={21} strokeWidth={1.2} /><span>Payments</span><small>{isMockMode ? "Disabled in preview" : "Razorpay checkout"}</small></div></div>
         </section>

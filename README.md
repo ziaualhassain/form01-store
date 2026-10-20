@@ -250,9 +250,11 @@ Neither dates nor campaign imagery are fabricated in live mode. Upcoming
 collections can publish an empty product selection, displaying an empty state.
 Publishing schedules still control whether a section is publicly visible.
 
-The early-access button explains that subscriptions are not connected. In live
-mode it optionally leads to existing account registration, explicitly not a
-notification subscription or reservation. Mock mode never creates an account.
+The collection hero's **Explore the collection** button moves directly to that
+drop's products for signed-in and guest visitors alike. It does not open an
+account-registration or early-access placeholder modal. Legacy `campaign.cta_label`
+values are not used for this action, since notification subscriptions and
+reservations are not connected.
 No conservation/donation claims are made without supporting backend content.
 
 ## Journal and Our Story

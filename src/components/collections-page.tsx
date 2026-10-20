@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight, Circle, Leaf, Mountain, Sun } from "lucide-react";
@@ -37,7 +37,7 @@ function CollectionPhoto({ desktop, mobile, alt }: { desktop: string; mobile: st
   return desktop && failed !== desktop ? <picture>{mobile && <source media="(max-width: 640px)" srcSet={mobile} />}<Image src={desktop} alt={alt} fill unoptimized sizes="100vw" loading="eager" fetchPriority="high" onError={() => setFailed(desktop)} /></picture> : <div className="collection-image-empty">{desktop ? "Campaign image unavailable" : "FORM/01"}</div>;
 }
 
-export default function CollectionsPage({ sections, products, status, catalogueStatus, wishlist, onWishlist, onProduct, onNotify, onRetry, selectedId, onDrop }: {
+export default function CollectionsPage({ sections, products, status, catalogueStatus, wishlist, onWishlist, onProduct, onRetry, selectedId, onDrop }: {
   sections: HomepageSection[];
   products: Product[];
   status: "loading" | "live" | "unavailable";
@@ -45,13 +45,13 @@ export default function CollectionsPage({ sections, products, status, catalogueS
   wishlist: string[];
   onWishlist: (product: Product) => void;
   onProduct: (product: Product) => void;
-  onNotify: () => void;
   onRetry: () => void;
   selectedId: string;
   onDrop: (id: string) => void;
 }) {
   const [lookbookOpen, setLookbookOpen] = useState(false);
   const panelId = useId();
+  const collectionBody = useRef<HTMLElement>(null);
   const drops = sections.filter((section) => section.type === "product_collection").slice().sort((a, b) => a.position - b.position);
   const active = drops.find((section) => section.id === selectedId) || drops[0];
   const content = active?.content || {};
@@ -79,7 +79,7 @@ export default function CollectionsPage({ sections, products, status, catalogueS
         {campaign.headline ? <h2>{text(campaign.headline)}</h2> : null}
         <p>{text(campaign.description, text(content.description))}</p>
         {launchAt && <LaunchCountdown key={`${active.id}-${launchAt}`} launchAt={launchAt} />}
-        <button className="collection-notify" onClick={onNotify}>{text(campaign.cta_label, "Join the Journey")} <ArrowRight size={15} /></button>
+        <button className="collection-notify" onClick={() => { collectionBody.current?.scrollIntoView({ block: "start" }); collectionBody.current?.focus({ preventScroll: true }); }}>Explore the collection <ArrowRight size={15} /></button>
       </div>
       {campaign.location ? <span className="collection-location">{text(campaign.location)}</span> : null}
     </section>
@@ -88,7 +88,7 @@ export default function CollectionsPage({ sections, products, status, catalogueS
       const next = event.key === "ArrowRight" ? (index + 1) % drops.length : event.key === "ArrowLeft" ? (index - 1 + drops.length) % drops.length : event.key === "Home" ? 0 : event.key === "End" ? drops.length - 1 : null;
       if (next !== null) { event.preventDefault(); onDrop(drops[next].id); setLookbookOpen(false); document.getElementById(`${panelId}-drop-${drops[next].id}`)?.focus(); }
     }}>{text(record(drop.content.campaign).tab_label, text(drop.content.title))}</button>)}</div>
-    <section className="collection-body" role="tabpanel" id={panelId} aria-labelledby={`${panelId}-drop-${active.id}`}>
+    <section className="collection-body" ref={collectionBody} role="tabpanel" id={panelId} aria-labelledby={`${panelId}-drop-${active.id}`} tabIndex={-1}>
       <div className="collection-heading"><h2>The Collection</h2><p>{text(campaign.collection_description, text(content.description))}</p><button onClick={() => setLookbookOpen(!lookbookOpen)} aria-expanded={lookbookOpen}>View Lookbook <ArrowRight size={14} /></button></div>
       {lookbookOpen && <div className="collection-lookbook"><h3>{text(content.title)} / Lookbook</h3><p>{text(campaign.description, text(content.description))}</p><div>{collectionProducts.filter((product) => product.image_urls?.[0] || product.image_url).map((product) => <button key={product.id} onClick={() => onProduct(product)} aria-label={`Explore ${product.title}`}><Image src={product.image_urls?.[0] || product.image_url || ""} alt={product.title} fill unoptimized sizes="(max-width: 640px) 50vw, 25vw" /><span>{product.title}</span></button>)}</div>{!collectionProducts.length && <p>Lookbook images have not been published for this drop yet.</p>}</div>}
       <ShopCatalogue key={active.id} collectionView products={collectionProducts} status={active.products !== undefined ? "live" : catalogueStatus} query="" category="All" onCategory={() => {}} wishlist={wishlist} onWishlist={onWishlist} onProduct={onProduct} onRetry={onRetry} />

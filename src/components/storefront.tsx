@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ArrowRight, Check, CircleUserRound, Menu, Package, Search, ShoppingBag, X } from "lucide-react";
-import { Address, ApiError, Cart, CartItem, HomepageSection, Order, Product, Profile, Variant, apiErrorMessage, getToken, storeApi } from "@/lib/api";
+import { Address, ApiError, Cart, CartItem, CheckoutQuote, HomepageSection, Order, Product, Profile, Variant, apiErrorMessage, getToken, storeApi } from "@/lib/api";
 import DynamicHomepage from "@/components/dynamic-homepage";
 import { Grid2X2, Home as HomeIcon } from "lucide-react";
 import Link from "next/link";
@@ -39,6 +39,7 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
   const [wishlist, setWishlist] = useState<string[]>([]);
   const wishlistPending = useRef(new Set<string>());
   const checkoutAttempt = useRef<{ signature: string; key: string } | null>(null);
+  const [couponCode, setCouponCode] = useState("");
   const ordersRefreshing = useRef(false);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
@@ -232,7 +233,7 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     finally { setLoading(false); }
   };
   const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); try { const updated = await storeApi.updateProfile({ first_name: data.get("first_name"), last_name: data.get("last_name"), display_name: data.get("display_name"), phone: data.get("phone") }); setProfile(updated); setPanel(null); notify("Profile updated"); } catch (error) { notify(apiErrorMessage(error)); } };
-  const logout = () => { localStorage.removeItem("form01_store_token"); checkoutAttempt.current = null; setProfile(null); setCart(null); setOrders([]); setAddresses([]); setWishlist([]); setSelectedAddress(null); setPanel(null); setAccountStatus("signed-out"); notify("You have been signed out"); };
+  const logout = () => { localStorage.removeItem("form01_store_token"); checkoutAttempt.current = null; setCouponCode(""); setProfile(null); setCart(null); setOrders([]); setAddresses([]); setWishlist([]); setSelectedAddress(null); setPanel(null); setAccountStatus("signed-out"); notify("You have been signed out"); };
   const openOrders = async () => { if (isMockMode) { setPanel("orders"); return; } if (!getToken()) { setPanel("account"); return; } try { setOrders(await storeApi.orders()); setPanel("orders"); } catch (error) { notify(apiErrorMessage(error)); } };
   const toggleWishlist = async (product: Product) => {
     if (wishlistPending.current.has(product.id)) return;
@@ -249,7 +250,7 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     finally { wishlistPending.current.delete(product.id); }
   };
   const saveAddress = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { recipient_name: data.get("recipient_name"), phone: data.get("phone"), line1: data.get("line1"), city: data.get("city"), state_or_region: data.get("state_or_region"), postal_code: data.get("postal_code"), country_code: data.get("country_code"), is_default_shipping: true }; setLoading(true); try { const address = await storeApi.createAddress(payload); setAddresses((current) => [address, ...current]); setSelectedAddress(address); setPanel(addressFromAccount ? null : "cart"); notify("Delivery address saved"); } catch (error) { notify(apiErrorMessage(error)); } finally { setLoading(false); } };
-  const beginCheckout = async () => {
+  const beginCheckout = async (quote?: CheckoutQuote) => {
     if (isMockMode) { notify("Checkout is disabled in mock mode. No payment or order will be created."); return; }
     if (!getToken()) { setPanel("account"); notify("Sign in to place your order"); return; }
     if (!selectedAddress) { setAddressFromAccount(false); setPanel("address"); notify("Add a delivery address before checkout"); return; }
@@ -259,16 +260,23 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
       if (!cart?.items.length) { notify("Your cart is empty"); return; }
       const razorpay = (window as Window & { Razorpay?: new (options: Record<string, unknown>) => { open: () => void } }).Razorpay;
       if (!razorpay) { notify("Load Razorpay Checkout to continue"); return; }
-      const signature = JSON.stringify([cart.id, cart.items.map((item) => [item.variant_id, item.quantity]), cart.total_minor, selectedAddress.id]);
+      if (!quote) { notify("Review a checkout quote before paying."); return; }
+      if (quote.gst_test && !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) { notify("GST test checkout is local-only."); return; }
+      const signature = JSON.stringify([cart.id, cart.items.map((item) => [item.variant_id, item.quantity]), cart.total_minor, selectedAddress.id, couponCode, quote.gst_test?.configuration_version]);
       if (checkoutAttempt.current?.signature !== signature) checkoutAttempt.current = { signature, key: crypto.randomUUID() };
-      const checkout = await storeApi.checkout(checkoutAttempt.current.key, selectedAddress.id);
+      const checkout = await storeApi.checkout(checkoutAttempt.current.key, selectedAddress.id, couponCode, quote.gst_test?.configuration_version);
+      if (checkout.gst_test || quote.gst_test) {
+        if (!checkout.gst_test || !quote.gst_test || !checkout.provider_key_id?.startsWith("rzp_test_")) { notify("GST test checkout requires a matching test quote and Razorpay Test keys. Refresh your cart."); return; }
+        if (checkout.total_minor !== quote.total_minor || checkout.gst_test.configuration_version !== quote.gst_test.configuration_version) { notify("Test order total changed. Refresh the cart and review it before paying."); return; }
+      }
       if (!checkout.provider_order_id) { notify("Payment setup is not available"); return; }
-      const gateway = new razorpay({ key: checkout.provider_key_id, amount: checkout.total_minor, currency: "INR", name: "FORM/01", order_id: checkout.provider_order_id, handler: async (response: Record<string, string>) => {
+      const gateway = new razorpay({ key: checkout.provider_key_id, amount: checkout.total_minor, currency: "INR", name: checkout.gst_test ? "FORM/01 - GST TEST ONLY" : "FORM/01", order_id: checkout.provider_order_id, handler: async (response: Record<string, string>) => {
         setLoading(true);
         try {
           await storeApi.verifyPayment(response);
           const confirmed = await storeApi.order(checkout.order_number);
           checkoutAttempt.current = null;
+          setCouponCode("");
           await loadCart();
           setConfirmedOrder(confirmed); setOrders((current) => [confirmed, ...current.filter((order) => order.id !== confirmed.id)]);
           setPanel("confirmation"); notify("Payment response received. Check your order's payment status.");
@@ -278,7 +286,10 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
         } finally { setLoading(false); }
       } });
       gateway.open();
-    } catch (error) { notify(apiErrorMessage(error)); }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 400) checkoutAttempt.current = null;
+      notify(apiErrorMessage(error));
+    }
     finally { setLoading(false); }
   };
 
@@ -307,7 +318,7 @@ export default function Storefront({ shopPage = false, collectionsPage = false, 
     {menuOpen && <div id={menuId} className="mobile-menu"><Link href="/shop" onClick={() => setMenuOpen(false)}>Shop</Link><Link href="/collections" onClick={() => setMenuOpen(false)}>Collections</Link><button onClick={() => { setMenuOpen(false); void openOrders(); }}>Your Orders</button></div>}
     </header>
     {isMockMode && <div className="mock-mode-notice" role="status">Mock preview · Sample products and imagery · Checkout disabled</div>}
-    {cartVisible && <CartPage selectedAddress={selectedAddress} onAddress={() => { setAddressFromAccount(false); setPanel("address"); }} cart={cart} products={products} status={cartStatus} catalogueStatus={catalogueStatus} busy={loading} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onQuantity={changeCartQuantity} onCheckout={() => void beginCheckout()} onRetry={() => { void loadCart(); void loadCatalogue(); }} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} />}
+    {cartVisible && <CartPage couponCode={couponCode} onCoupon={setCouponCode} selectedAddress={selectedAddress} onAddress={() => { setAddressFromAccount(false); setPanel("address"); }} cart={cart} products={products} status={cartStatus} catalogueStatus={catalogueStatus} busy={loading} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onQuantity={changeCartQuantity} onCheckout={(quote) => void beginCheckout(quote)} onRetry={() => { void loadCart(); void loadCatalogue(); }} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} />}
     {!cartVisible && policyVisible && <PolicyPage key={policySlug} slug={policySlug} />}
     {!cartVisible && !policyVisible && <>
     {accountVisible ? <AccountDashboard profile={isMockMode ? mockProfile : profile} orders={isMockMode ? mockOrders : orders} addresses={isMockMode ? mockAddresses : addresses} products={products} wishlist={wishlist} status={accountStatus} onRetry={() => void loadAccount()} onRefreshOrders={() => void refreshOrders()} onSignIn={() => { setAuthMode("login"); setPanel("account"); }} onEdit={() => { if (isMockMode) notify("Profile editing is disabled in mock preview."); else setPanel("profile"); }} onAddAddress={() => { if (isMockMode) notify("Address changes are disabled in mock preview."); else { setAddressFromAccount(true); setPanel("address"); } }} onLogout={logout} onProduct={openProduct} onWishlist={toggleWishlist} /> : selectedProduct ? <ProductDetail key={selectedProduct.id} product={selectedProduct} products={products} cart={cart} wishlist={wishlist} loading={loading} onAdd={addToCart} onWishlist={toggleWishlist} onProduct={openProduct} onBack={backToShop} backLabel={collectionsVisible ? "Collections" : "Shop"} onCategory={filterByProductType} /> : collectionsVisible ? <CollectionsPage sections={homepageSections} products={products} status={homepageStatus} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onNotify={() => setPanel("earlyAccess")} selectedId={collectionId} onDrop={(id) => { setCollectionId(id); window.location.hash = `collection/${encodeURIComponent(id)}`; }} onRetry={() => void loadLive()} /> : shopVisible ? <ShopCatalogue products={products} status={catalogueStatus} query={query} category={category} onCategory={setCategory} wishlist={wishlist} onWishlist={toggleWishlist} onProduct={openProduct} onRetry={() => void loadCatalogue()} /> : <DynamicHomepage sections={homepageSections} products={products} catalogueStatus={catalogueStatus} wishlist={wishlist} onWishlist={toggleWishlist} onRetry={() => void loadCatalogue()} status={homepageStatus} onProductType={filterByProductType} onProduct={openProduct} />}

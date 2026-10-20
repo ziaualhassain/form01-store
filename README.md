@@ -45,6 +45,42 @@ Mock photography uses sample CDN images plus the bundled EST.01 artwork, not
 the exact product renders in the reference screenshot. Replace the sample
 assets in `src/lib/mock-data.ts` or publish your real artwork in live mode.
 
+## Draft order documents
+
+In live mode, expanded customer order details offer **Download draft PDF** for
+paid orders created after middleware migration `c0d3456e7f88`. Downloads require
+the signed-in owner and preserve the original seller details and order amounts.
+Old orders without a snapshot and unpaid orders do not offer a document.
+Failures appear inline rather than downloading error payloads.
+
+GST registration/rates are unconfirmed: tax collection is disabled and admin
+draft rules do not change checkout charges. Every PDF says **DRAFT - NOT A TAX
+INVOICE**; it is not a receipt, statutory invoice or refund statement. No
+automatic email is sent. Unsupported PDF text scripts produce an explicit
+error rather than replacing customer names.
+
+## Checkout coupons and cart completion
+
+The live cart accepts one coupon code after a delivery address is selected.
+Apply requests a backend quote and displays the accepted code, savings, and
+discounted total. Invalid, disabled, scheduled, expired, minimum-spend, and
+usage-limit errors block checkout until the code is corrected or removed.
+Cart/address/code changes invalidate the previous quote; checkout recalculates
+the discount from the database and sends no client-authored discount amount.
+Changing codes also changes the checkout idempotency signature.
+
+Admin manages percentage/fixed-INR coupons and limits. Quotes do not reserve
+usage; pending payment reserves a slot, success redeems it, and failure/expiry
+or order cancellation releases it. A closed payment modal stays pending until
+expiry. Discounts retain at least INR 1 payable; shipping/tax still follow the
+existing zero-charge rules. Mock mode cannot apply coupons.
+
+After successful backend payment confirmation, purchased quantities are removed
+from the original cart lines. Unrelated/later additions remain. Failed or
+cancelled payments do not clear the cart, and stock changes no longer silently
+remove cart items. The customer must adjust unavailable quantities before
+checkout. Deploy middleware migration `a8b1234c5d66` before the frontends.
+
 ## Homepage content
 
 ### Categories and CDN artwork

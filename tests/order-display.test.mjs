@@ -17,6 +17,7 @@ const exports = {};
 vm.runInNewContext(outputText, {
   exports,
   require(name) {
+    if (name === "@/lib/api") return { downloadDraftInvoice: async () => {}, apiErrorMessage: String };
     if (name === "@/lib/store-config") return { isMockMode: false };
     if (name === "next/image") return { default: () => null };
     if (name === "next/link") return { default: ({ children, ...props }) => React.createElement("a", props, children) };
